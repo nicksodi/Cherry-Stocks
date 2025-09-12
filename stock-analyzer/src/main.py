@@ -8,16 +8,15 @@ def get_signal_color(signal):
     colors = {
         "STRONG BUY": Fore.GREEN,
         "BUY": Fore.LIGHTGREEN_EX,
-        "NEUTRAL": Fore.YELLOW,
-        "SELL": Fore.LIGHTRED_EX,
-        "STRONG SELL": Fore.RED
+        "HOLD": Fore.YELLOW,
+        "SELL": Fore.RED
     }
     return colors.get(signal, Fore.WHITE)
 
 def main():
     try:
         ticker = input("Enter company ticker (e.g., AAPL): ").strip().upper()
-        sma_period = int(input("Enter SMA period (e.g., 20): ").strip())
+        sma_period = int(input("Enter SMA period (e.g., 150): ").strip())
         
         print(f"\n{Fore.CYAN}Analyzing {ticker}...{Style.RESET_ALL}")
         analyzer = TechnicalAnalyzer(ticker, sma_period)
@@ -33,25 +32,25 @@ def main():
             print(f"\n{Fore.CYAN}Price Analysis:{Style.RESET_ALL}")
             print(f"Current Price: ${details['price']:.2f}")
             print(f"SMA({sma_period}): ${details['sma']:.2f}")
-            print(f"Price vs SMA: {Fore.GREEN if details['price'] > details['sma'] else Fore.RED}" 
-                  f"{((details['price']/details['sma'])-1)*100:.2f}%{Style.RESET_ALL}")
+            signal_color = get_signal_color(details['sma_strength'])
+            print(f"Price vs SMA: {signal_color}{details['sma_distance_percent']:.2f}%{Style.RESET_ALL}")
+            print(f"Trend Signal: {signal_color}{details['sma_strength']}{Style.RESET_ALL}")
             
             # Technical Indicators
             print(f"\n{Fore.CYAN}Technical Indicators:{Style.RESET_ALL}")
             print(f"{'─'*60}")
             
             # RSI
-            signal_color = get_signal_color(details['rsi']['verdict'])
             print(f"RSI: {details['rsi']['value']:.2f} "
-                  f"({signal_color}{details['rsi']['verdict']}{Style.RESET_ALL})")
+                  f"(Zone: {details['rsi']['zone']})")
             
-            # CCI
-            signal_color = get_signal_color(details['cci']['verdict'])
-            print(f"CCI: {details['cci']['value']:.2f} "
-                  f"({signal_color}{details['cci']['verdict']}{Style.RESET_ALL})")
+            # Volume
+            volume_color = Fore.GREEN if details['volume']['verdict'] else Fore.RED
+            print(f"Volume Ratio: {volume_color}{details['volume']['ratio']:.2f}x{Style.RESET_ALL}")
             
-            # ATR
-            print(f"ATR: ${details['atr']:.2f} ({details['atr_percent']:.2f}% of price)")
+            # Volatility
+            print(f"Volatility: {details['volatility']['level']} "
+                  f"(ATR: {details['volatility']['atr_percent']:.2f}%)")
             
             # MACD
             print(f"\n{Fore.CYAN}MACD Analysis:{Style.RESET_ALL}")
@@ -62,7 +61,7 @@ def main():
             
             # Final Verdict
             print(f"\n{'='*60}")
-            verdict = f"{Fore.GREEN}BUY" if is_buy else f"{Fore.RED}NOT A BUY"
+            verdict = f"{Fore.GREEN}BUY SIGNAL DETECTED" if is_buy else f"{Fore.RED}NO BUY SIGNAL"
             print(f"Final Verdict: {verdict}{Style.RESET_ALL}")
             print(f"{'='*60}")
             

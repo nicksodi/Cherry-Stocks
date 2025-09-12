@@ -1,165 +1,241 @@
 import yfinance as yf
 import pandas as pd
 import numpy as np
-import time
-import talib
+import talib as ta
+from typing import Tuple, Dict, Any
 from enum import Enum
 
-class SignalStrength(Enum):
+class TrendStrength(Enum):
     STRONG_BUY = "STRONG BUY"
     BUY = "BUY"
-    NEUTRAL = "NEUTRAL"
+    HOLD = "HOLD"
     SELL = "SELL"
-    STRONG_SELL = "STRONG SELL"
+
+class RSIZone(Enum):
+    VERY_LOW = "VERY LOW"
+    LOW = "LOW"
+    NEUTRAL = "NEUTRAL"
+    HIGH = "HIGH"
+    VERY_HIGH = "VERY HIGH"
+
+class VolatilityLevel(Enum):
+    LOW = "LOW VOLATILITY"
+    MEDIUM = "MEDIUM VOLATILITY"
+    HIGH = "HIGH VOLATILITY"
+
+class MarketCapSize(Enum):
+    LARGE = "LARGE CAP"
+    MID = "MID CAP"
+    SMALL = "SMALL CAP"
 
 class TechnicalAnalyzer:
-    def __init__(self, ticker, sma_period):
+    def __init__(self, ticker: str, sma_period: int = 150, lookback_days: int = 200):
         self.ticker = ticker
+        self.ticker_info = yf.Ticker(ticker).info
         self.sma_period = sma_period
-        self.stock_price = None
-        self.sma = None
-        self.rsi = None
-        self.cci = None
-        self.macd = None
-        self.macd_signal = None
-        self.macd_hist = None
-        self.atr = None
+        self.lookback_days = lookback_days
+        self.data = self._fetch_data()
+        self._calculate_indicators()
 
-    def analyze_rsi(self, rsi_value):
-        if rsi_value < 20:
-            return SignalStrength.STRONG_BUY
-        elif rsi_value < 30:
-            return SignalStrength.BUY
-        elif rsi_value > 80:
-            return SignalStrength.STRONG_SELL
-        elif rsi_value > 70:
-            return SignalStrength.SELL
+    def _fetch_data(self) -> pd.DataFrame:
+        """Fetch historical data for analysis"""
+        ticker = yf.Ticker(self.ticker)
+        df = ticker.history(period=f"{self.lookback_days}d")
+        if df.empty:
+            raise ValueError(f"No data found for ticker {self.ticker}")
+        return df
+
+    def _calculate_indicators(self) -> None:
+        """Calculate all technical indicators"""
+        # Calculate SMA and its slope
+        self.data['SMA'] = ta.SMA(self.data['Close'], timeperiod=self.sma_period)
+        self.data['SMA_Slope'] = self.data['SMA'].diff(5)  # 5-day slope
+
+        # Calculate MACD
+        self.data['MACD'], self.data['MACD_Signal'], self.data['MACD_Hist'] = ta.MACD(
+            self.data['Close'], fastperiod=12, slowperiod=26, signalperiod=9
+        )
+
+        # Calculate RSI
+        self.data['RSI'] = ta.RSI(self.data['Close'], timeperiod=14)
+
+        # Calculate ATR
+        self.data['ATR'] = ta.ATR(self.data['High'], self.data['Low'], self.data['Close'], timeperiod=14)
+
+        # Calculate Volume MA
+        self.data['Volume_MA20'] = ta.SMA(self.data['Volume'], timeperiod=20)
+
+    def check_market_cap(self) -> Tuple[MarketCapSize, float]:
+        """Analyze market cap size"""
+        market_cap = self.ticker_info.get('marketCap', 0)
+        cap_billions = market_cap / 1e9
+        
+        if cap_billions >= 50:
+            return MarketCapSize.LARGE, cap_billions
+        elif cap_billions >= 1:
+            return MarketCapSize.MID, cap_billions
         else:
-            return SignalStrength.NEUTRAL
+            return MarketCapSize.SMALL, cap_billions
 
-    def analyze_cci(self, cci_value):
-        if cci_value < -200:
-            return SignalStrength.STRONG_BUY
-        elif cci_value < -100:
-            return SignalStrength.BUY
-        elif cci_value > 200:
-            return SignalStrength.STRONG_SELL
-        elif cci_value > 100:
-            return SignalStrength.SELL
+    def check_sma_verdict(self) -> Tuple[TrendStrength, float]:
+        """
+        Check price position relative to SMA
+        Returns: (trend_strength, percentage_above_sma)
+        """
+        current_price = self.data['Close'].iloc[-1]
+        current_sma = self.data['SMA'].iloc[-1]
+        sma_slope = self.data['SMA_Slope'].iloc[-1]
+        
+        percentage_above_sma = ((current_price / current_sma) - 1) * 100
+        
+        if sma_slope <= 0:
+            return TrendStrength.HOLD, percentage_above_sma
+        
+        if percentage_above_sma < 10:
+            return TrendStrength.STRONG_BUY, percentage_above_sma
+        elif 10 <= percentage_above_sma < 15:
+            return TrendStrength.BUY, percentage_above_sma
+        elif 15 <= percentage_above_sma < 25:
+            return TrendStrength.HOLD, percentage_above_sma
         else:
-            return SignalStrength.NEUTRAL
+            return TrendStrength.SELL, percentage_above_sma
 
-    def fetch_data(self):
-        try:
-            stock = yf.Ticker(self.ticker)
-            required_days = int(self.sma_period * 1.2)
+    def check_macd_verdict(self) -> Tuple[bool, Dict[str, float]]:
+        """
+        Check MACD for bullish signals
+        Returns: (verdict, macd_values)
+        """
+        macd = self.data['MACD'].iloc[-1]
+        signal = self.data['MACD_Signal'].iloc[-1]
+        hist = self.data['MACD_Hist'].iloc[-1]
+        prev_hist = self.data['MACD_Hist'].iloc[-2]
+        
+        # Bullish crossover or positive divergence
+        crossover = prev_hist < 0 and hist > 0
+        positive_divergence = macd > signal and macd > 0
+        
+        verdict = crossover or positive_divergence
+        values = {'macd': macd, 'signal': signal, 'histogram': hist}
+        
+        return verdict, values
 
-            # Convert trading days to appropriate period string
-            if required_days <= 7:
-                period = "1mo"
-            elif required_days <= 30:
-                period = "2mo"
-            elif required_days <= 90:
-                period = "6mo"
-            elif required_days <= 180:
-                period = "1y"
-            else:
-                period = "2y"
+    def check_rsi_verdict(self) -> Tuple[RSIZone, float]:
+        """
+        Categorize RSI into zones
+        Returns: (rsi_zone, rsi_value)
+        """
+        current_rsi = self.data['RSI'].iloc[-1]
+        
+        if current_rsi < 20:
+            return RSIZone.VERY_LOW, current_rsi
+        elif 20 <= current_rsi < 40:
+            return RSIZone.LOW, current_rsi
+        elif 40 <= current_rsi < 60:
+            return RSIZone.NEUTRAL, current_rsi
+        elif 60 <= current_rsi < 90:
+            return RSIZone.HIGH, current_rsi
+        else:
+            return RSIZone.VERY_HIGH, current_rsi
 
-            # Fetch data with retry mechanism
-            for _ in range(3):
-                data = stock.history(period=period, interval="1d", auto_adjust=True)
-                if not data.empty:
-                    break
-                time.sleep(1)
+    def check_volatility(self) -> Tuple[VolatilityLevel, float]:
+        """
+        Analyze ATR as percentage of price
+        Returns: (volatility_level, atr_percentage)
+        """
+        current_price = self.data['Close'].iloc[-1]
+        current_atr = self.data['ATR'].iloc[-1]
+        atr_percentage = (current_atr / current_price) * 100
+        
+        if atr_percentage < 3:
+            return VolatilityLevel.LOW, atr_percentage
+        elif 6 <= atr_percentage <= 10:
+            return VolatilityLevel.MEDIUM, atr_percentage
+        else:
+            return VolatilityLevel.HIGH, atr_percentage
 
-            if data.empty:
-                raise ValueError(f"No data found for ticker {self.ticker}")
+    def check_volume_verdict(self) -> Tuple[bool, float]:
+        """
+        Check if volume is above 10% of average
+        Returns: (verdict, volume_ratio)
+        """
+        current_volume = self.data['Volume'].iloc[-1]
+        avg_volume = self.data['Volume_MA20'].iloc[-1]
+        
+        volume_ratio = current_volume / avg_volume
+        verdict = volume_ratio > 1.1  # Volume should be 10% above average
+        
+        return verdict, volume_ratio
 
-            min_data_required = max(self.sma_period, 14)
-            if len(data) < min_data_required:
-                raise ValueError(f"Not enough historical data for {self.ticker}. Got {len(data)} days, need {min_data_required}")
+    def get_daily_movement(self) -> Tuple[float, float]:
+        """Calculate daily price movement and percentage"""
+        current_price = self.data['Close'].iloc[-1]
+        prev_price = self.data['Close'].iloc[-2]
+        change = current_price - prev_price
+        change_percent = (change / prev_price) * 100
+        return change, change_percent
 
-            # Calculate all technical indicators using TA-Lib
-            close_prices = data['Close'].values
-            high_prices = data['High'].values
-            low_prices = data['Low'].values
-
-            # Current price and SMA
-            self.stock_price = float(close_prices[-1])
-            self.sma = float(talib.SMA(close_prices, timeperiod=self.sma_period)[-1])
-            
-            # RSI calculation
-            self.rsi = float(talib.RSI(close_prices, timeperiod=14)[-1])
-            
-            # CCI calculation
-            self.cci = float(talib.CCI(high_prices, low_prices, close_prices, timeperiod=20)[-1])
-            
-            # MACD calculation
-            self.macd, self.macd_signal, self.macd_hist = talib.MACD(
-                close_prices,
-                fastperiod=12,
-                slowperiod=26,
-                signalperiod=9
-            )
-            
-            # ATR calculation (14-period by default)
-            self.atr = float(talib.ATR(high_prices, low_prices, close_prices, timeperiod=14)[-1])
-            
-            # Convert MACD values to float and get latest values
-            self.macd = float(self.macd[-1])
-            self.macd_signal = float(self.macd_signal[-1])
-            self.macd_hist = float(self.macd_hist[-1])
-
-            # Verify calculations
-            if any(pd.isna([self.stock_price, self.sma, self.rsi, self.cci, 
-                           self.macd, self.macd_signal, self.macd_hist, self.atr])):
-                raise ValueError("Invalid calculations detected")
-
-        except Exception as e:
-            raise ValueError(f"Error analyzing {self.ticker}: {str(e)}")
-
-    def get_analysis_details(self):
-        """Returns the current values used in the analysis with verdicts"""
-        if any(x is None for x in [self.stock_price, self.sma, self.rsi, self.cci, self.atr]):
-            return None
-
-        rsi_verdict = self.analyze_rsi(self.rsi)
-        cci_verdict = self.analyze_cci(self.cci)
-
-        details = {
-            "price": round(self.stock_price, 2),
-            "sma": round(self.sma, 2),
-            "rsi": {
-                "value": round(self.rsi, 2),
-                "verdict": rsi_verdict.value
+    def get_analysis_details(self) -> Dict[str, Any]:
+        """Get all analysis details for display"""
+        current_price = self.data['Close'].iloc[-1]
+        market_cap_size, market_cap = self.check_market_cap()
+        daily_change, daily_change_percent = self.get_daily_movement()
+        
+        sma_strength, sma_percentage = self.check_sma_verdict()
+        macd_verdict, macd_values = self.check_macd_verdict()
+        rsi_zone, rsi_value = self.check_rsi_verdict()
+        volatility_level, atr_percentage = self.check_volatility()
+        volume_verdict, volume_ratio = self.check_volume_verdict()
+        
+        return {
+            'company': {
+                'market_cap': market_cap,
+                'market_cap_category': market_cap_size.value,
+                'price': current_price,
+                'daily_change': daily_change,
+                'daily_change_percent': daily_change_percent
             },
-            "cci": {
-                "value": round(self.cci, 2),
-                "verdict": cci_verdict.value
+            'trend': {
+                'sma': self.data['SMA'].iloc[-1],
+                'sma_distance_percent': sma_percentage,
+                'sma_strength': sma_strength.value
             },
-            "macd": round(self.macd, 2),
-            "macd_signal": round(self.macd_signal, 2),
-            "macd_hist": round(self.macd_hist, 2),
-            "atr": round(self.atr, 2),
-            "atr_percent": round((self.atr / self.stock_price) * 100, 2)  # ATR as percentage of price
+            'momentum': {
+                'macd': macd_values['macd'],
+                'macd_signal': macd_values['signal'],
+                'macd_hist': macd_values['histogram'],
+                'macd_verdict': macd_verdict,
+                'rsi': {
+                    'value': rsi_value,
+                    'zone': rsi_zone.value
+                }
+            },
+            'risk': {
+                'volatility': {
+                    'level': volatility_level.value,
+                    'atr_percent': atr_percentage
+                },
+                'volume': {
+                    'ratio': volume_ratio,
+                    'verdict': volume_verdict
+                }
+            }
         }
-        return details
 
-    def is_buy(self):
-        try:
-            self.fetch_data()
-            if any(x is None for x in [self.stock_price, self.sma, self.rsi, self.cci]):
-                return False
-                
-            rsi_signal = self.analyze_rsi(self.rsi)
-            cci_signal = self.analyze_cci(self.cci)
-            
-            return (
-                self.stock_price > self.sma and
-                rsi_signal in [SignalStrength.STRONG_BUY, SignalStrength.BUY, SignalStrength.NEUTRAL] and
-                cci_signal in [SignalStrength.STRONG_BUY, SignalStrength.BUY, SignalStrength.NEUTRAL]
-            )
-        except Exception as e:
-            print(f"Analysis failed: {str(e)}")
+    def is_buy(self) -> bool:
+        """Combine all verdicts into final decision"""
+        sma_strength, _ = self.check_sma_verdict()
+        macd_verdict, _ = self.check_macd_verdict()
+        rsi_zone, _ = self.check_rsi_verdict()
+        volume_verdict, _ = self.check_volume_verdict()
+        
+        # Must be in STRONG_BUY or BUY zone for SMA
+        if sma_strength not in [TrendStrength.STRONG_BUY, TrendStrength.BUY, TrendStrength.HOLD]:
             return False
+        
+        # RSI should be in LOW or NEUTRAL zone
+        rsi_good = rsi_zone in [RSIZone.VERY_LOW, RSIZone.LOW, RSIZone.NEUTRAL]
+        
+        # Need at least 2 out of 3 confirmations
+        confirmations = sum([macd_verdict, rsi_good, volume_verdict])
+        
+        return confirmations >= 2
