@@ -77,28 +77,38 @@ class TechnicalAnalyzer:
         else:
             return MarketCapSize.SMALL, cap_billions
 
-    def check_sma_verdict(self) -> Tuple[TrendStrength, float]:
+    def check_sma_verdict(self) -> Tuple[TrendStrength, float, float]:
         """
-        Check price position relative to SMA
-        Returns: (trend_strength, percentage_above_sma)
+        Check price position relative to SMA using ATR multiples
+        Returns: (trend_strength, percentage_above_sma, atr_multiple)
         """
         current_price = self.data['Close'].iloc[-1]
         current_sma = self.data['SMA'].iloc[-1]
+        current_atr = self.data['ATR'].iloc[-1]
         sma_slope = self.data['SMA_Slope'].iloc[-1]
         
+        # Calculate traditional percentage
         percentage_above_sma = ((current_price / current_sma) - 1) * 100
         
-        if sma_slope <= 0:
-            return TrendStrength.HOLD, percentage_above_sma
+        # Calculate ATR multiple
+        distance_from_sma = abs(current_price - current_sma)
+        atr_multiple = distance_from_sma / current_atr
         
-        if percentage_above_sma < 10:
-            return TrendStrength.STRONG_BUY, percentage_above_sma
-        elif 10 <= percentage_above_sma < 15:
-            return TrendStrength.BUY, percentage_above_sma
-        elif 15 <= percentage_above_sma < 25:
-            return TrendStrength.HOLD, percentage_above_sma
-        else:
-            return TrendStrength.SELL, percentage_above_sma
+        if sma_slope <= 0:
+            return TrendStrength.HOLD, percentage_above_sma, atr_multiple
+        
+        # Determine trend strength based on both percentage and ATR multiple
+        if percentage_above_sma > 0:  # Price above SMA
+            if atr_multiple < 1.0:  # Very close to SMA
+                return TrendStrength.STRONG_BUY, percentage_above_sma, atr_multiple
+            elif atr_multiple < 2.0:  # Moderately extended
+                return TrendStrength.BUY, percentage_above_sma, atr_multiple
+            elif atr_multiple < 3.0:  # Starting to extend
+                return TrendStrength.HOLD, percentage_above_sma, atr_multiple
+            else:  # Too extended
+                return TrendStrength.SELL, percentage_above_sma, atr_multiple
+        else:  # Price below SMA
+            return TrendStrength.HOLD, percentage_above_sma, atr_multiple
 
     def check_macd_verdict(self) -> Tuple[bool, Dict[str, float]]:
         """
@@ -180,7 +190,7 @@ class TechnicalAnalyzer:
         market_cap_size, market_cap = self.check_market_cap()
         daily_change, daily_change_percent = self.get_daily_movement()
         
-        sma_strength, sma_percentage = self.check_sma_verdict()
+        sma_strength, sma_percentage, atr_multiple = self.check_sma_verdict()
         macd_verdict, macd_values = self.check_macd_verdict()
         rsi_zone, rsi_value = self.check_rsi_verdict()
         volatility_level, atr_percentage = self.check_volatility()
@@ -188,6 +198,7 @@ class TechnicalAnalyzer:
         
         return {
             'company': {
+                'name': self.ticker_info.get('longName', self.ticker),
                 'market_cap': market_cap,
                 'market_cap_category': market_cap_size.value,
                 'price': current_price,
@@ -197,7 +208,8 @@ class TechnicalAnalyzer:
             'trend': {
                 'sma': self.data['SMA'].iloc[-1],
                 'sma_distance_percent': sma_percentage,
-                'sma_strength': sma_strength.value
+                'sma_strength': sma_strength.value,
+                'atr_multiple': atr_multiple
             },
             'momentum': {
                 'macd': macd_values['macd'],
@@ -223,7 +235,7 @@ class TechnicalAnalyzer:
 
     def is_buy(self) -> bool:
         """Combine all verdicts into final decision"""
-        sma_strength, _ = self.check_sma_verdict()
+        sma_strength, _, _ = self.check_sma_verdict()  # Add the missing underscore for atr_multiple
         macd_verdict, _ = self.check_macd_verdict()
         rsi_zone, _ = self.check_rsi_verdict()
         volume_verdict, _ = self.check_volume_verdict()

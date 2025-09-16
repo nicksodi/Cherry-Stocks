@@ -69,6 +69,17 @@ def get_volatility_status(atr_percent: float) -> tuple:
     else:
         return "High Risk", "danger"
 
+def get_atr_multiple_status(atr_multiple: float) -> tuple:
+    """Get ATR multiple status and color"""
+    if atr_multiple < 1.0:
+        return "Low Extension", "normal"
+    elif atr_multiple < 2.0:
+        return "Moderate Extension", "normal"
+    elif atr_multiple < 3.0:
+        return "High Extension", "off"
+    else:
+        return "Extreme Extension", "inverse"
+
 def render_company_header(details):
     """Render company overview section"""
     company = details['company']
@@ -82,17 +93,35 @@ def render_company_header(details):
             "Current Price",
             f"${company['price']:.2f}",
             f"{daily_change_percent:+.2f}%",
-            delta_color="normal"
+            delta_color="normal" if daily_change_percent > 0 else "inverse"
         )
+    
     with col2:
-        cap_color = "success" if market_cap >= 50 else "warning" if market_cap >= 1 else "error"
-        st.markdown(f"### ${market_cap:.1f}B")
-        st.markdown(f'<p style="color: {"green" if market_cap >= 50 else "orange" if market_cap >= 1 else "red"};">{company["market_cap_category"]}</p>', unsafe_allow_html=True)
+        st.markdown(f"### {company['name']}")  # Add company name
+        st.caption(f"${company['price']:.2f}")
+    
     with col3:
+        cap_status = ("Large Cap" if market_cap >= 50 else 
+                     "Mid Cap" if market_cap >= 1 else 
+                     "Small Cap")
+        st.metric(
+            "Market Cap",
+            f"${market_cap:.1f}B",
+            cap_status,
+            # Remove delta_color to remove arrow
+        )
+    
+    with col4:
         atr = details['risk']['volatility']['atr_percent']
-        atr_color = "green" if atr < 3 else "orange" if atr < 6 else "red"
-        st.markdown(f"### {atr:.1f}%")
-        st.markdown(f'<p style="color: {atr_color};">{details["risk"]["volatility"]["level"]}</p>', unsafe_allow_html=True)
+        vol_status = ("Low Risk" if atr < 3 else 
+                     "Medium Risk" if atr < 6 else 
+                     "High Risk")
+        st.metric(
+            "Volatility",
+            f"{atr:.1f}%",
+            vol_status,
+            # Remove delta_color to remove arrow
+        )
 
 def render_technical_indicators(details):
     """Render technical indicators section"""
@@ -101,66 +130,87 @@ def render_technical_indicators(details):
     with col1:
         st.markdown("#### 📈 Trend")
         sma_distance = details['trend']['sma_distance_percent']
-        sma_color = "normal" if sma_distance < 10 else "off" if sma_distance < 15 else "inverse"
-        with st.container():
-            st.metric(
-                "SMA Distance",
-                f"{sma_distance:+.1f}%",
-                "Optimal Zone" if sma_distance < 10 else "Caution Zone" if sma_distance < 15 else "Danger Zone",
-                delta_color=sma_color
-            )
+        atr_multiple = details['trend']['atr_multiple']
+        
+        # SMA Distance status
+        if sma_distance <= 0:
+            delta_color = "inverse"
+            status = "Bearish"
+        else:
+            if atr_multiple < 2.0:  # Combine optimal and good entry
+                delta_color = "normal"
+                status = "Bullish"
+            elif atr_multiple < 3.0:
+                delta_color = "off"
+                status = "Neutral"
+            else:
+                delta_color = "inverse"
+                status = "Bearish"
+        
+        st.metric(
+            "SMA Distance",
+            f"{sma_distance:+.1f}%",
+            status,
+            delta_color=delta_color
+        )
+        
+        # ATR Multiple status
+        atr_status = "Bullish" if atr_multiple < 2 else "Bearish"
+        atr_color = "normal" if atr_multiple < 2 else "inverse"
+        st.metric(
+            "ATR Multiple",
+            f"{atr_multiple:.1f}x",
+            atr_status,
+            delta_color=atr_color
+        )
     
     with col2:
         st.markdown("#### 🔄 Momentum")
         rsi_value = details['momentum']['rsi']['value']
-        rsi_status = ("Oversold" if rsi_value < 30 else 
-                     "Overbought" if rsi_value > 70 else 
-                     "Neutral")
-        rsi_color = "off" if 30 <= rsi_value <= 70 else "inverse"
         
-        with st.container():
-            st.metric(
-                "RSI",
-                f"{rsi_value:.1f}",
-                rsi_status,
-                delta_color=rsi_color
-            )
-            
-            macd = details['momentum']['macd']
-            macd_signal = details['momentum']['macd_signal']
-            macd_color = "normal" if macd > macd_signal else "inverse"
-            st.metric(
-                "MACD",
-                f"{macd:.2f}",
-                "Bullish" if macd > macd_signal else "Bearish",
-                delta_color=macd_color
-            )
+        # RSI with standardized status
+        if rsi_value < 30:
+            rsi_status = "Bullish"  # Oversold -> Bullish
+            rsi_color = "normal"
+        elif rsi_value > 70:
+            rsi_status = "Bearish"  # Overbought -> Bearish
+            rsi_color = "inverse"
+        else:
+            rsi_status = "Neutral"
+            rsi_color = "off"
+        
+        st.metric(
+            "RSI",
+            f"{rsi_value:.1f}",
+            rsi_status,
+            delta_color=rsi_color
+        )
+        
+        # MACD (already using Bullish/Bearish)
+        macd = details['momentum']['macd']
+        macd_signal = details['momentum']['macd_signal']
+        macd_status = "Bullish" if macd > macd_signal else "Bearish"
+        macd_color = "normal" if macd > macd_signal else "inverse"
+        
+        st.metric(
+            "MACD",
+            f"{macd:.2f}",
+            macd_status,
+            delta_color=macd_color
+        )
     
     with col3:
-        st.markdown("#### ⚡ Risk Metrics")
+        st.markdown("#### 📊 Volume")
         volume_ratio = details['risk']['volume']['ratio']
-        volume_status = "Above Average" if volume_ratio > 1.1 else "Below Average"
+        volume_status = "Bullish" if volume_ratio > 1.1 else "Bearish"
         volume_color = "normal" if volume_ratio > 1.1 else "inverse"
         
-        with st.container():
-            st.metric(
-                "Volume",
-                f"{volume_ratio:.1f}x",
-                volume_status,
-                delta_color=volume_color
-            )
-            
-            volatility = details['risk']['volatility']['atr_percent']
-            vol_status = ("Low Risk" if volatility < 3 else 
-                         "Medium Risk" if volatility < 6 else 
-                         "High Risk")
-            vol_color = "normal" if volatility < 3 else "off" if volatility < 6 else "inverse"
-            st.metric(
-                "Volatility",
-                f"{volatility:.1f}%",
-                vol_status,
-                delta_color=vol_color
-            )
+        st.metric(
+            "Volume Ratio",
+            f"{volume_ratio:.1f}x",
+            volume_status,
+            delta_color=volume_color
+        )
 
 def main():
     set_page_config()
